@@ -127,6 +127,12 @@ def setup_logging(log_level):
     help="Number of workers to use for multiprocessing, default to None to disable multiprocessing",
 )
 @click.option(
+    "--num-samples",
+    default=10,
+    type=int,
+    help="Number of samples to use for each op (applies to FACTO currently). Default: 10",
+)
+@click.option(
     "--check-overhead-dominated-ops",
     default=False,
     is_flag=True,
@@ -173,6 +179,7 @@ def cli(
     log_dir,
     disable_output_logs,
     num_workers,
+    num_samples,
     check_overhead_dominated_ops,
     p,
     dsl,
@@ -188,6 +195,9 @@ def cli(
     setup_logging(log_level)
     if ops:
         ops = ops.split(",")
+
+    logger.info(f"Running BackendBench with {suite} suite")
+    print(f"Running BackendBench with {suite} suite")
 
     suite = {
         "smoke": lambda: SmokeTestSuite,
@@ -209,6 +219,7 @@ def cli(
             "cuda",
             torch.bfloat16,
             filter=ops,
+            num_runs=num_samples,
         ),
     }[suite]()
 
@@ -251,10 +262,16 @@ def cli(
     all_correctness_results = []
     all_performance_results = []
 
+    logger.info(f"Testing {backend_name} backend")
     if num_workers is None:
+        logger.info(f"Using {suite} suite")
+        num_tests = 0
         for test in suite:
+            logger.info("Running test: " + str(test.op) + " is it in backend? " + str(test.op in backend))
             if test.op not in backend:
                 continue
+
+            num_tests += 1
 
             logger.debug(test.op)
 
@@ -271,16 +288,21 @@ def cli(
             all_performance_results.extend(performance_results)
 
             logger.debug(f"max memory allocated: {torch.cuda.max_memory_allocated():,}")
+        logger.info(f"Ran {num_tests} tests")
     else:
+        num_tests = 0
         with multiprocessing_eval.MultiprocessingEvaluator(
             num_workers,
             daemon=daemon,
         ) as evaluator:
+            logger.info(f"Using {suite} suite")
             # Submit all tasks
             for test in suite:
+                logger.info("Running test: " + str(test.op) + " is it in backend? " + str(test.op in backend))
                 if test.op not in backend:
                     continue
 
+                num_tests += 1
                 logger.debug(test.op)
 
                 _ = evaluator.submit_task(
@@ -289,6 +311,8 @@ def cli(
                     test.correctness_tests,
                     test.performance_tests,
                 )
+
+            logger.info(f"Ran {num_tests} tests")
 
             # Start evaluation
             evaluator.start_evaluation()
@@ -466,4 +490,8 @@ def setup_kernel_agent_backend(kernel_agent_backend, suite, num_workers=4, max_r
 
 
 if __name__ == "__main__":
-    cli()
+    try:
+        cli()
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
